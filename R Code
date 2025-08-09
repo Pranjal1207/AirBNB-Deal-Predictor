@@ -1,0 +1,61 @@
+getwd()
+train <- read.csv("airbnb_with_boroughs.csv")
+test <-  read.csv("airbnbTest_with_boroughs.csv")
+install.packages("xgboost")
+library("xgboost")
+
+names(test)
+names(train)
+
+test$Deal <- NA
+
+# Combine train and test datasets to ensure consistent feature encoding
+combined <- rbind(
+  train[, c("neighbourhood", "floor", "price", "footage", "avgreview", "borough")],  # Training data
+  test[, c("neighbourhood", "floor", "price", "footage", "avgreview", "borough")]    # Testing data
+)
+
+# Generate dummy variables using model.matrix for the combined dataset
+combined_encoded <- model.matrix(~neighbourhood + floor + price + footage + avgreview + borough - 1, data = combined)
+
+# Split the combined encoded data back into train and test sets
+train_encoded <- combined_encoded[1:nrow(train), ]  # Extract training part
+test_encoded <- combined_encoded[(nrow(train) + 1):nrow(combined), ]  # Extract testing part
+
+# Encode the target variable (Deal) as numeric labels
+# Mapping: Neutral -> 0, Bad -> 1, Good -> 2
+train_labels <- as.numeric(factor(train$Deal, levels = c("Neutral", "Bad", "Good"))) - 1
+
+# Train the XGBoost model for multi-class classification using softmax
+final_model <- xgboost(data = data.matrix(train_encoded),
+                       label = train_labels,
+                       eta = 0.05,
+                       max_depth = 10,
+                       nrounds = 1000,
+                       objective = "multi:softmax",
+                       num_class = 3,  # Number of classes (this time, it's 3 instead of2)
+                       verbose = 1,
+                       subsample = 0.8,
+                       colsample_bytree = 0.8,
+                       min_child_weight = 5,
+                       eval_metric = "merror",
+                       gamma = 0.5, 
+                       lambda = 1, 
+                       alpha = 1)
+
+# Predict class labels directly for the training data
+train_predicted_labels <- predict(final_model, data.matrix(train_encoded))
+
+# Calculate training accuracy
+training_accuracy <- mean(train_predicted_labels == train_labels)
+print(paste("Training Accuracy:", training_accuracy))
+
+# Predict class labels directly for the test dataset
+test_predicted_labels <- predict(final_model, data.matrix(test_encoded))
+
+# Map numeric labels back to original categories
+label_mapping <- c("Neutral", "Bad", "Good")
+test_predicted_deals <- label_mapping[test_predicted_labels + 1]
+
+submission <- data.frame(ID = test$id, Predicted_Deal = test_predicted_deals)
+write.csv(submission, "submission_1000airbnb.csv", row.names = FALSE)
